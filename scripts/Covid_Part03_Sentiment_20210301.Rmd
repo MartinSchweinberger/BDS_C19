@@ -1,0 +1,194 @@
+---
+title: "A real-time corpus-based analysis of the discourse around COVID19 in the Australian Twittersphere - Part 3: Sentiment analysis"
+author: "Anonymous"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output: word_document
+bibliography: bibliography.bib
+link-citations: yes
+---
+
+This document details the data analysis for the project *A real-time corpus-based analysis of the discourse around COVID19 in the Australian Twittersphere*. 
+
+This part of the analysis performs a sentiment analysis on the entire data collected in 2020.
+
+The analysis is initiated by clearing the workspace, setting options, and activating packages as well as functions.
+
+```{r covtwit_03_01, echo=T, eval = T, message=FALSE, warning=FALSE}
+# clean current workspace
+rm(list=ls(all=T))  
+# load libraries
+library(tokenizers)
+library(tm)
+library(stringi)
+library(tidytext)
+library(tidyverse)
+library(SnowballC)
+library(here)
+# set options
+options(stringsAsFactors = F)
+options(scipen = 999)
+options(max.print=10000)
+# define image directory
+imageDirectory<-"images"
+```
+
+Load twitter data
+
+```{r covtwit_03_02, echo=T, eval = T, message=FALSE, warning=FALSE}
+covidtwitterdata <- read.delim(here::here("data", "covidtwitter2020data_topics_periods.txt"), comment.char = "", quote = "")
+# inspect data
+head(covidtwitterdata)
+```
+
+# Sentiment analysis
+
+Clean texts for sentiment analysis
+
+
+Perform sentiment analysis on cleaned texts
+
+```{r covtwit_03_03, echo=T, eval = T, message=FALSE, warning=FALSE}
+# load library
+library(syuzhet)
+# perform sentiment analysis
+sentiments <- get_nrc_sentiment(covidtwitterdata$Text)
+# add doc_id to sentiments
+covidtwitterdata <- cbind(covidtwitterdata, sentiments)
+# save data
+write.table(covidtwitterdata, here::here("tables", "covidtwitter2020data_fullyannotated.txt"),
+            sep = "\t", row.names = F, quote = F)
+# inspect data
+head(covidtwitterdata)
+```
+
+Prepare data for visualizing sentiments per period
+
+```{r covtwit_03_04, echo=T, eval = T, message=FALSE, warning=FALSE}
+p8d <- covidtwitterdata %>%
+  dplyr::select(Date, Period, Topic, negative, positive) %>%
+  dplyr::mutate(Period = str_remove_all(Period, "Period_kw_"),
+                Period = as.numeric(Period)) %>%
+  dplyr::group_by(Period, Topic) %>%
+  dplyr::summarise(positive = sum(positive),
+                   negative = sum(negative),
+                   Polarity = mean(positive/negative)-1)
+# inspect data
+head(p8d)
+```
+
+```{r covtwit_03_05, echo=T, eval = T, message=FALSE, warning=FALSE}
+ggplot(p8d, aes(x = Period, y = Polarity, color = Topic, linetype = Topic)) +
+#  facet_wrap(vars(Topic), ncol = 1, scales="free_y") +
+#  facet_wrap(vars(Topic), ncol = 1) +
+  geom_hline(yintercept = 0, linetype="dashed", color = "red") +
+  geom_smooth(se = F) +
+  labs(x = "Phase", y = "Polarity\n(negative < 0 | positive > 0)") +
+  guides(color=guide_legend(nrow = 3)) +
+  theme_set(theme_bw(base_size = 12)) +
+  theme(legend.position="top",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.text.x = element_text(angle = 0, size =10)) +
+  scale_x_continuous(breaks = seq(1, 7, 1), 
+                     labels= seq(1, 7, 1), 
+                     limits = c(1, 7)) + 
+    scale_y_continuous(limits = c(-.5, .5)) +
+    scale_colour_manual(labels = names(table(p8d$Topic)),
+                      breaks = names(table(p8d$Topic)),
+                      values = paste0("gray", seq(20, 80, 15)), 
+                      name = "") +
+  scale_linetype_manual(labels = names(table(p8d$Topic)),
+                        breaks = names(table(p8d$Topic)),
+                        values = seq(1, 5, 1), 
+                        name = "") +
+  ggsave(file = here::here("images", "Covid_Phases_Polarity.png"), 
+         height = 6,  width = 6, dpi = 320)
+```
+
+
+```{r covtwit_03_06, echo=T, eval = T, message=FALSE, warning=FALSE}
+p9d <- covidtwitterdata %>%
+  dplyr::select(Period, Topic, anger, fear, sadness, anticipation, joy, trust) %>%
+  gather(Emotion, Rate, anger:trust) %>%
+  dplyr::mutate(Period = str_remove_all(Period, "Period_kw_"),
+                Period = as.numeric(Period)) %>%
+  dplyr::group_by(Period, Topic, Emotion) %>%
+  dplyr::summarise(Rate = mean(Rate)) %>%
+  
+  dplyr::ungroup() %>%
+  dplyr::mutate(Emotion = toupper(Emotion),
+                Emotion = factor(Emotion, levels = c("ANGER", "ANTICIPATION",  "FEAR",
+                                                     "JOY", "SADNESS", "TRUST")))
+# inspect data
+head(p9d)
+```
+
+
+```{r covtwit_03_07, echo=T, eval = T, message=FALSE, warning=FALSE}
+ggplot(p9d, aes(x = Period, y = Rate, group = Emotion, color = Emotion, linetype = Emotion)) +
+#  facet_wrap(vars(Topic), ncol = 2, scales="free_y") +
+  facet_wrap(vars(Topic), ncol = 1) +
+  geom_line(size = .75) +  
+  labs(x = "Phase", y = "Rate (among COVID-19 tweets)") +
+  theme_set(theme_bw(base_size = 12)) +
+  theme(legend.position="top",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.text.x = element_text(angle = 0, size =10)) +
+  scale_colour_manual(values = paste0("gray", rep(c(30, 70), each = 3)),
+                      name = "Core emotion",
+                      breaks = names(table(p9d$Emotion)),  
+                      labels = names(table(p9d$Emotion))) +
+  scale_linetype_manual(labels = names(table(p9d$Emotion)),
+                        breaks = names(table(p9d$Emotion)),
+                        values = rep(c(1:3), 2), 
+                        name = "Core emotion") +
+  scale_x_continuous(breaks = seq(1, 7, 1), 
+                     labels= seq(1, 7, 1), 
+                     limits = c(1, 7)) +  
+  theme(legend.position="top", 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.text.x = element_text(angle = 0, hjust = 1)) +
+  ggsave(file = here::here("images", "Covid_Phases_Emotions.png"), 
+         height = 6,  width = 5, dpi = 320)
+```
+
+
+```{r covtwit_03_08, echo=T, eval = T, message=FALSE, warning=FALSE}
+ggplot(p9d, aes(x = Period, y = Rate, group = Topic, color = Topic, linetype = Topic)) +
+#  facet_wrap(vars(Topic), ncol = 2, scales="free_y") +
+  facet_wrap(vars(Emotion), ncol = 2) +
+  geom_line(size = .75) +  
+  labs(x = "Phase", y = "Rate (among COVID-19 tweets)") +
+  guides(color=guide_legend(nrow = 3)) +
+  theme_set(theme_bw(base_size = 12)) +
+  theme(legend.position="top",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.text.x = element_text(angle = 0, size =10)) +
+    scale_colour_manual(labels = names(table(p9d$Topic)),
+                      breaks = names(table(p9d$Topic)),
+                      values = paste0("gray", seq(20, 80, 15)), 
+                      name = "") +
+  scale_linetype_manual(labels = names(table(p9d$Topic)),
+                        breaks = names(table(p9d$Topic)),
+                        values = seq(1, 5, 1), 
+                        name = "") +
+  scale_x_continuous(breaks = seq(1, 7, 1), 
+                     labels= seq(1, 7, 1), 
+                     limits = c(1, 7)) +  
+  theme(legend.position="top", 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.text.x = element_text(angle = 0, hjust = 1)) +
+  ggsave(file = here::here("images", "Covid_Phases_ByEmotion.png"), 
+         height = 6,  width = 6, dpi = 320)
+```
+
+Outro
+
+```{r}
+sessionInfo()
+```
+

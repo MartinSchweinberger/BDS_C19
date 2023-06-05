@@ -1,0 +1,878 @@
+---
+title: "A real-time corpus-based analysis of the discourse around COVID19 in the Australian Twittersphere - Part 1: Classification"
+author: "Anonymous"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output: word_document
+bibliography: bibliography.bib
+link-citations: yes
+---
+
+# Introduction
+
+This document details the data analysis for the project *A real-time corpus-based analysis of the discourse around COVID19 in the Australian Twittersphere*. 
+
+This part of the analysis aims to detect words and bigrams that differ in frequency between 2019 and 2020.
+
+The analysis is initiated by clearing the workspace, setting options, and activating packages as well as functions.
+
+```{r covtwit_01_01, echo=T, eval = T, message=FALSE, warning=FALSE}
+# clean current workspace
+rm(list=ls(all=T))  
+# load libraries
+library(tidyverse)
+library(tokenizers)
+library(tm)
+library(stringi)
+library(tidytext)
+library(tidyverse)
+library(SnowballC)
+library(lubridate)
+library(readr)
+library(textclean)
+library(here)
+# set options
+options(stringsAsFactors = F)
+options(scipen = 999)
+options(max.print=10000)
+```
+
+# Data processing
+
+Load and clean tweets
+
+```{r covtwit_01_02, echo=T, eval = T, message=FALSE, warning=FALSE}
+# elements to be removed
+remove_reg <- "&amp;|&lt;|&gt;"
+# load and process data
+tweets <- read_csv( here::here("data/024_schweinberger_covid_linguistics", "all_tweets_1_percent_sample.csv")) %>%
+  dplyr::rename(Date = created_at,
+                Text = text) %>%
+  dplyr::select(Date, Text) %>%
+  dplyr::mutate(Date = str_remove_all(Date, " .*"),
+                Date = str_replace_all(Date, ".*([0-9]{4,4}-[0-9]{2,2}-[0-9]{2,2}).*", "\\1")) %>%
+  dplyr::filter(nchar(Date) == 10) %>%
+  dplyr::mutate(Year = str_remove_all(Date, "-.*"),
+                Year = str_extract(Year, "[0-9]{4,4}"),
+                Text = str_squish(Text),
+                Text = str_remove_all(Text, remove_reg),
+                Id = paste("Tweet_", 1:length(Text), "_", Date, sep = ""),
+                Text = tolower(Text),
+                NoElements = str_count(Text, " ")+1,
+                NoTweets = 1) %>%
+  na.omit() %>%
+  dplyr::filter(Text != "")
+# save data
+write.table(tweets, here::here("data", "tweets.txt"), sep = "\t", row.names = F, quote = F)
+# inspect data
+head(tweets)
+```
+
+Summary
+
+```{r covtwit_01_03, echo=T, eval = T, message=FALSE, warning=FALSE}
+tweets %>%
+  dplyr::select(Year, NoTweets, NoElements) %>%
+  dplyr::group_by(Year) %>%
+  dplyr::summarise(Tweets = n(),
+                   Elements = sum(NoElements))
+```
+
+Clean tweets
+
+```{r covtwit_01_04, echo=T, eval = T, message=FALSE, warning=FALSE}
+# load stopwords
+english_stopwords <- readLines("https://slcladal.github.io/resources/stopwords_en.txt", encoding = "UTF-8")
+# elements to be removed
+remove_nonengl <- "[^[:alnum:]_]{1,}di[^[:alnum:]_]{1,}|yang|[^[:alnum:]_]{1,}kita[^[:alnum:]_]{1,}|[^[:alnum:]_]{1,}ini[^[:alnum:]_]{1,}|yg|[^[:alnum:]_]{1,}de[^[:alnum:]_]{1,}|[^[:alnum:]_]{1,}el[^[:alnum:]_]{1,}|[^[:alnum:]_]{1,}la[^[:alnum:]_]{1,}|[^[:alnum:]_]{1,}del[^[:alnum:]_]{1,}|[^[:alnum:]_]{1,}los[^[:alnum:]_]{1,}|[^[:alnum:]_]{1,}por[^[:alnum:]_]{1,}|[^[:alnum:]_]{1,}sakit[^[:alnum:]_]{1,}|[^[:alnum:]_]{1,}ng[^[:alnum:]_]{1,}|[^[:alnum:]_]{1,}ulo[^[:alnum:]_]{1,}|[^[:alnum:]_]{1,}ko[^[:alnum:]_]{1,}|[^[:alnum:]_]{1,}nyeams[^[:alnum:]_]{1,}"
+# clean tweets
+cleantweets <- tweets %>%
+  dplyr::mutate(Text = str_squish(Text),
+                Text = str_replace_all(Text, "http[^[:blank:]]{1,}", ""),
+                Text = replace_emoticon(Text),
+                Text = iconv(Text, from = "latin1", to = "ASCII", sub = "qwertz"),
+                Text = tm::removeWords(Text, stopwords('english')),
+                Text = str_replace_all(Text, "@[^[:blank:]]{1,}", ""),
+                Text = str_replace_all(Text, "^rt ", ""),
+                Text = str_replace_all(Text, "n't ", " not "),
+                Text = str_replace_all(Text, "[^[:alnum:][:space:]#]", ""),
+                Text = str_replace_all(Text, " [:digit:]{1,}", " "),
+                Text = tm::removePunctuation(Text),
+                Text = str_replace_all(Text, "ies$", "y"),
+                Text = str_replace_all(Text, "ies ", "y"),
+                Text = str_squish(Text)) %>%
+  dplyr::filter(Text != "") %>%
+  dplyr::filter(!str_detect(Text, remove_nonengl)) %>%
+  unnest_tokens(Word, Text, token = "tweets") %>%
+  dplyr::filter(!Word %in% english_stopwords) %>%
+  dplyr::filter(grepl("qwertz", Word) == F) %>%
+  dplyr::group_by(Id) %>%
+  dplyr::summarise(Text = paste(Word, collapse = " "),
+                   Date = unique(Date),
+                   Year = unique(Year),
+                   NoElements = unique(NoElements),
+                   NoTweets = unique(NoTweets)) %>%
+  dplyr::arrange(Date, Id)
+# save data
+write.table(cleantweets, here::here("data", "cleantweets.txt"), sep = "\t", row.names = F, quote = F)
+# inspect data
+head(cleantweets)
+```
+
+Test if tweets are clean
+
+```{r covtwit_01_05, echo=T, eval = T, message=FALSE, warning=FALSE}
+test <- cleantweets %>%
+  dplyr::filter(str_detect(Text, remove_nonengl))
+head(test)
+```
+
+Summary
+
+```{r covtwit_01_06, echo=T, eval = T, message=FALSE, warning=FALSE}
+cleantweets %>%
+  dplyr::select(Year, NoTweets, NoElements) %>%
+  dplyr::group_by(Year) %>%
+  dplyr::summarise(Tweets = n(),
+                   Elements = sum(NoElements))
+```
+
+## Creat training set
+
+Create vector of covid-related and non-covid-related terms
+
+```{r covtwit_01_07, echo=T, eval = T, message=FALSE, warning=FALSE}
+covidrelated <- c("[^[:blank:]]{0,}covid[^[:blank:]]{0,}",
+                  "[^[:blank:]]{0,}coronavirus[^[:blank:]]{0,}",
+                  "pandemic", "quarantine", "lockdown",
+                  "outbreak", "herd immun[[:alnum:] ]{0,}", 
+                  "flat[[:alnum:] ]{0,} curve")
+noncovidrelated <- c("fire", "burn", "climate", "extinction")
+# perform search
+cleantweets <- cleantweets %>%
+  dplyr::mutate(CovidTweet = ifelse(grepl(covidrelated, Text) == T, 1, 0),
+                Bushfire = ifelse(grepl(noncovidrelated, Text) == T, 1, 0)) 
+# inspect data
+head(cleantweets)
+```
+
+Create data frame with covidtweets
+
+```{r covtwit_01_08, echo=T, eval = T, message=FALSE, warning=FALSE}
+# set seed
+set.seed(12345)
+# extract covid tweets
+covidtweets <- cleantweets %>%
+  dplyr::select(Id, Date, Text, CovidTweet, Year, Bushfire) %>%
+  dplyr::filter(CovidTweet == 1 & Bushfire == 0) %>%
+  dplyr::mutate(Label = "Covid") %>%
+  dplyr::select(-Date, -CovidTweet, -Year, -Bushfire) %>%
+  sample_n(750) 
+head(covidtweets)
+```
+
+Create data frame with non-covidtweets.
+
+```{r covtwit_01_09, echo=T, eval = T, message=FALSE, warning=FALSE}
+noncovidtweets  <- cleantweets %>%
+  dplyr::select(Id, Date, Text, CovidTweet, Year, Bushfire) %>%
+  dplyr::filter(CovidTweet == 0) %>%
+  dplyr::mutate(MonthYear = str_replace_all(Date, ".*([0-9]{4,4}-[0-9]{2,2}).*", "\\1"))
+# set seed
+set.seed(12345)
+# extract sample from 2019
+noncovidtweets2019 <- noncovidtweets %>%
+  dplyr::filter(Year == "2019") %>%
+  sample_n(3750)
+# extract sample dealing with bushfires in january 2020
+# set seed
+set.seed(12345)
+noncovidtweets <- noncovidtweets %>%
+  dplyr::filter(MonthYear == "2020-01") %>%
+  dplyr::filter(Bushfire == 1) %>%
+  sample_n(500) 
+# combine two non-corvis samples
+noncovidtweets <- rbind(noncovidtweets2019, noncovidtweets)
+# Add classification
+noncovidtweets <- noncovidtweets %>%
+  dplyr::mutate(Label = "NonCovid") %>%
+  dplyr::select(-Date, -CovidTweet, -Year, -Bushfire, -MonthYear)
+# remove noncovidtweets2019 (for memory reasons)
+noncovidtweets2019 <- NULL
+# inspect data
+head(noncovidtweets)
+```
+
+ Create training data  
+ 
+```{r covtwit_01_10, echo=T, eval = T, message=FALSE, warning=FALSE}
+# create train data
+train <- rbind(covidtweets, noncovidtweets) %>%
+  as.data.frame()
+# inspect data
+head(train); table(train$Label)
+```
+
+# Classification (Keyword-Frequency-Based)
+
+Prepare for statistical extraction of keywords
+
+```{r covtwit_01_11, echo=T, eval = T, message=FALSE, warning=FALSE}
+# create table
+keywordtb <- train %>%
+  unnest_tokens(Word, Text, token = "tweets") %>%
+  group_by(Label) %>% 
+  count(Word, sort = TRUE) %>% 
+  spread(Label, n) %>% 
+  replace(is.na(.), 0) %>%
+  mutate(Total = Covid+NonCovid) %>%
+  dplyr::filter(Total > 10) %>%
+  dplyr::mutate(TotalTarget = sum(Covid),
+                TotalNonTarget = sum(NonCovid),
+                NRows = length(Word)) %>%
+  dplyr::rename(Target = Covid,
+                NonTarget = NonCovid) %>%
+  dplyr::select(-Total)
+# inspect data
+keywordtb
+```
+
+Perform statistics
+
+```{r covtwit_01_12, echo=T, eval = T, message=FALSE, warning=FALSE}
+source(here::here("scripts", "CoocStatzFisher.R"))
+# extract keywords
+keywords <- CoocStatzFisher(keywordtb)
+sigkeywords <- keywords %>%
+  dplyr::filter(CorrSignificance != "n.s.",
+                Type == "Overuse")
+# inspect data
+sigkeywords$Word
+```
+
+Extract relative frequency of Covid-related tweets
+
+```{r covtwit_01_13, echo=T, eval = T, message=FALSE, warning=FALSE}
+covidterms <- sigkeywords$Word
+# extract frequencies
+covidfreq <- tweets %>%
+  dplyr::select(Date, Text, NoTweets) %>%
+  dplyr::mutate(Frequency = str_count(Text, covidterms),
+                RFrequency = Frequency/NoTweets*100) %>%
+  dplyr::group_by(Date) %>%
+  dplyr::summarise(RelativeFrequency = mean(RFrequency)) %>%
+  dplyr::mutate(NumDate = 1:length(Date),
+                Date = factor(Date))
+# inspect data
+head(covidfreq)
+```
+
+
+Plot relative frequency of covid-related tweets
+
+```{r covtwit_01_14, echo=T, eval = T, message=FALSE, warning=FALSE}
+ggplot(covidfreq, aes(x = NumDate, y = RelativeFrequency)) +
+  geom_smooth(span = .2, color = "gray30", linetype="dotted") +
+  geom_line(color = "red") +
+  geom_vline(xintercept = length(covidfreq$Date)/2, linetype="dotted", 
+                color = "gray50") +
+  scale_x_discrete(breaks = covidfreq$NumDate[seq(1, length(covidfreq$NumDate), by = 5)],
+                   labels = covidfreq$Date[seq(1, length(covidfreq$Date), by = 5)],
+                   limits = 1: max(covidfreq$NumDate)) +
+  labs(x = "Date", y = "Relative Frequency") +
+  theme_set(theme_bw(base_size = 10)) +
+  theme(legend.position="none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.text.x = element_text(angle = 90, size =7.5))
+```
+
+# Support Vector Machine classification
+
+Load package and create TDM
+
+```{r covtwit_01_15, echo=T, eval = T, message=FALSE, warning=FALSE}
+library(RTextTools)
+# Create the document term matrix
+dtMatrix <- create_matrix(train["Text"])
+# inspect matrix
+dtMatrix
+```
+
+Create container and SVM model
+
+```{r covtwit_01_16, echo=T, eval = T, message=FALSE, warning=FALSE}
+# Configure the training data
+container <- create_container(dtMatrix, train$Label, trainSize=1:nrow(train), virgin=FALSE)
+# train SVM Model
+model <- train_model(container, "SVM", kernel="linear", cost=1)
+```
+
+Extract prediction-data
+
+```{r covtwit_01_17, echo=T, eval = T, message=FALSE, warning=FALSE}
+# new data
+predictionData <- cleantweets %>%
+  filter(Year == "2020") %>%
+  select(Text)
+predictionData  <- as.vector(unlist(predictionData))
+length(predictionData)
+```
+
+Split data into smaller chunks
+
+```{r covtwit_01_18, echo=T, eval = T, message=FALSE, warning=FALSE}
+# inspect data
+predictionData01 <- predictionData[1:100000]
+predictionData02 <- predictionData[100001:150000]
+predictionData03 <- predictionData[150001:200000]
+predictionData04 <- predictionData[200001:250000]
+predictionData05 <- predictionData[250001:300000]
+predictionData06 <- predictionData[300001:350000]
+predictionData07 <- predictionData[350001:400000]
+predictionData08 <- predictionData[400001:450000]
+predictionData09 <- predictionData[450001:500000]
+predictionData10 <- predictionData[500001:550000]
+predictionData11 <- predictionData[550001:600000]
+predictionData12 <- predictionData[600001:650000]
+predictionData13 <- predictionData[650001:700000]
+predictionData14 <- predictionData[700001:length(predictionData)]
+# inspect data
+predictionData01[1:5]
+```
+
+Write function for SVM 
+
+```{r covtwit_01_19, echo=T, eval = T, message=FALSE, warning=FALSE}
+svmaply <- function(predictionData, dtMatrix){
+  # create prediction matrix
+  predMatrix <- create_matrix(predictionData, originalMatrix=dtMatrix)
+  # create the container for predicted data
+  predSize = length(predictionData)
+  predictionContainer <- create_container(predMatrix, labels=rep(0,predSize), 
+                                          testSize=1:predSize, virgin=FALSE)
+  # apply model
+  results <- classify_model(predictionContainer, model)
+  # save results
+  svmresults <- results$SVM_LABEL
+  # remove superfluous object from memory
+  predSize <- NULL
+  predMatrix <- NULL
+  predictionContainer <- NULL
+  results <- NULL
+  # return predicted labeks
+  return(svmresults)
+}
+```
+
+Apply SVM function to data
+
+```{r covtwit_01_20, echo=T, eval = T, message=FALSE, warning=FALSE}
+svmresults01 <- svmaply(predictionData01, dtMatrix)
+svmresults02 <- svmaply(predictionData02, dtMatrix)
+svmresults03 <- svmaply(predictionData03, dtMatrix)
+svmresults04 <- svmaply(predictionData04, dtMatrix)
+svmresults05 <- svmaply(predictionData05, dtMatrix)
+svmresults06 <- svmaply(predictionData06, dtMatrix)
+svmresults07 <- svmaply(predictionData07, dtMatrix)
+svmresults08 <- svmaply(predictionData08, dtMatrix)
+svmresults09 <- svmaply(predictionData09, dtMatrix)
+svmresults10 <- svmaply(predictionData10, dtMatrix)
+svmresults11 <- svmaply(predictionData11, dtMatrix)
+svmresults12 <- svmaply(predictionData12, dtMatrix)
+svmresults13 <- svmaply(predictionData13, dtMatrix)
+svmresults14 <- svmaply(predictionData14, dtMatrix)
+# inspect results
+table(svmresults01)
+```
+
+Combine results into a single vector
+
+```{r covtwit_01_21, echo=T, eval = T, message=FALSE, warning=FALSE}
+svm_results <- c(svmresults01, svmresults02, svmresults03, svmresults04, 
+                 svmresults05, svmresults06, svmresults07, svmresults08, 
+                 svmresults09, svmresults10, svmresults11, svmresults12, 
+                 svmresults13, svmresults14)
+# inspect SVM results
+table(svm_results)
+```
+
+Add predictions to data
+
+```{r covtwit_01_22, echo=T, eval = T, message=FALSE, warning=FALSE}
+cleantweets2020 <- cleantweets %>%
+  dplyr::filter(Year == "2020")
+cleantweets2020$SVM_class <- svm_results
+# save data
+write.table(cleantweets2020, here::here("data", "cleantweets_classified.txt"), 
+            sep = "\t", row.names = F, quote = F)
+# add training labels to data
+Train_class <- train %>% 
+  dplyr::select(Id, Label) %>%
+  dplyr::rename(Train_class = Label)
+cleantweets2020 <- left_join(cleantweets2020, Train_class, by = "Id")
+# inspect data
+head(cleantweets2020)
+```
+
+Assess SVM accuracy
+
+```{r covtwit_01_23, echo=T, eval = T, message=FALSE, warning=FALSE}
+table(cleantweets2020$SVM_class, cleantweets2020$Train_class)
+```
+
+Tabulate results
+
+```{r covtwit_01_24, echo=T, eval = T, message=FALSE, warning=FALSE}
+p4d <- cleantweets2020 %>%
+  dplyr::mutate(SVM_class = ifelse(SVM_class == "Covid", 1, 0),
+                Date = factor(Date)) %>%
+  dplyr::group_by(Date) %>%
+  dplyr::summarise(Covidtweets = sum(SVM_class),
+                   Total = n(),
+                   Percent = Covidtweets/Total*100) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(NumDate = 1:length(Percent))
+# inspect data
+head(p4d)
+```
+
+Plot results
+
+```{r covtwit_01_25, echo=T, eval = T, message=FALSE, warning=FALSE}
+ggplot(p4d, aes(x = NumDate, y = Percent)) +
+  geom_smooth(span = .2, color = "gray30", linetype="dotted") +
+  geom_line(color = "black") +
+  scale_x_discrete(breaks = p4d$NumDate[seq(1, length(p4d$NumDate), by = 5)],
+                   labels = p4d$Date[seq(1, length(p4d$Date), by = 5)],
+                   limits = 1: max(p4d$NumDate)) +
+  labs(x = "Date", y = "Percent (of all tweets)") +
+  theme_set(theme_bw(base_size = 12)) +
+  theme(legend.position="none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.text.x = element_text(angle = 90, size =7.5)) +
+  ggsave(file = here::here("images", "Covid_SVM.png"), height = 6,  width = 8, dpi = 320)
+```
+
+# Periodization (Keywords-based)
+
+Process data
+
+```{r covtwit_01_26, echo=T, eval = T, message=FALSE, warning=FALSE}
+ctdata <- cleantweets2020 %>%
+  dplyr::filter(SVM_class == "Covid") %>%
+  dplyr::rename(doc_id = Date) %>%
+  dplyr::group_by(doc_id) %>%
+  dplyr::summarize(text = paste(Text, collapse = " ")) %>%
+  data.frame()
+# create corpus object
+corpus <- Corpus(DataframeSource(ctdata))
+# preprocessing chain
+processedCorpus <- tm_map(corpus, stripWhitespace)
+processedCorpus <- tm_map(processedCorpus, content_transformer(tokenize_ngrams), 
+                        n = 2, n_min = 1, ngram_delim = "_", simplify = T)
+minimumFrequency <- 10
+DTM <- DocumentTermMatrix(processedCorpus, 
+                          control = list(bounds = list(global = c(minimumFrequency, Inf))))
+dim(DTM)
+```
+
+Reduce DTM (keywords only)
+
+```{r covtwit_01_27, echo=T, eval = T, message=FALSE, warning=FALSE}
+# clean Terms
+dimnames(DTM)$Terms <- str_remove_all(dimnames(DTM)$Terms, fixed("\"")) 
+dimnames(DTM)$Terms <- str_remove_all(dimnames(DTM)$Terms, fixed(","))
+covidterms_redux <- covidterms[which(covidterms %in% dimnames(DTM)$Terms)]
+DTM_reduced <- as.matrix(DTM[, covidterms_redux])
+dim(DTM_reduced)
+```
+
+Create heatmap
+
+```{r covtwit_01_28, echo=T, eval = T, message=FALSE, warning=FALSE}
+p2d <- as.matrix(DTM_reduced) %>%
+  scale() %>%
+  as.data.frame() %>%
+  dplyr::mutate(Date = rownames(.)) %>%
+  tidyr::gather(Keyword, Frequency, sigkeywords$Word[1]:sigkeywords$Word[length(sigkeywords$Word)]) %>%
+  dplyr::mutate(Date = str_replace_all(Date, "\\..*", ""),
+                Date = str_replace_all(Date, "X", ""),
+                NumDate = 1:length(Date))
+head(p2d)
+```
+
+
+```{r covtwit_01_29, echo=T, eval = T, message=FALSE, warning=FALSE}
+every_nth = function(n) {
+  return(function(x) {x[c(TRUE, rep(FALSE, n - 1))]})
+}
+ggplot(p2d, aes(x = Date, y = Keyword, fill = Frequency)) +
+  geom_tile()+
+  scale_x_discrete(breaks = every_nth(n = 5)) +
+  scale_fill_gradient(name = "Frequency",
+                      low = "#FFFFFF",
+                      high = "#012345") +
+  labs(x = "Date", y = "Keyword") +
+  theme_set(theme_bw(base_size = 12)) +
+  theme(legend.position="none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.text.x = element_text(angle = 90, size =8)) +
+  ggsave(file = here::here("images", "Covid_lggheat.png"), 
+         height = 10,  width = 8, dpi = 320)
+```
+
+
+```{r covtwit_01_30, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+library(gplots)
+m <- DTM_reduced %>%
+   scale()
+my_palette <- colorRampPalette(c("white", "white", "gray30"))(n = 1000)
+# display plot
+hm <- heatmap.2(m, col = my_palette, density.info="none", trace="none", 
+                dendrogram=c("row"), key=FALSE)
+hc <- as.hclust(hm$rowDendrogram)
+```
+
+
+Determine optimal N of clusters
+
+```{r covtwit_01_31, echo=T, eval = T, message=FALSE, warning=FALSE}
+library(fpc)
+library(cluster)
+# perform k-means
+km02 <- pam(DTM_reduced, 2)
+km03 <- pam(DTM_reduced, 3)
+km04 <- pam(DTM_reduced, 4)
+km05 <- pam(DTM_reduced, 5)
+km06 <- pam(DTM_reduced, 6)
+km07 <- pam(DTM_reduced, 7)
+km08 <- pam(DTM_reduced, 8)
+km09 <- pam(DTM_reduced, 9)
+km10 <- pam(DTM_reduced, 10)
+km11 <- pam(DTM_reduced, 11)
+km12 <- pam(DTM_reduced, 12)
+km13 <- pam(DTM_reduced, 13)
+km14 <- pam(DTM_reduced, 14)
+km15 <- pam(DTM_reduced, 15)
+km16 <- pam(DTM_reduced, 16)
+km17 <- pam(DTM_reduced, 17)
+km18 <- pam(DTM_reduced, 18)
+km19 <- pam(DTM_reduced, 19)
+km20 <- pam(DTM_reduced, 20)
+# extract calinhara score
+ch_km02 <- round(calinhara(DTM_reduced, km02$cluster),digits=2)
+ch_km03 <- round(calinhara(DTM_reduced, km03$cluster),digits=2)
+ch_km04 <- round(calinhara(DTM_reduced, km04$cluster),digits=2)
+ch_km05 <- round(calinhara(DTM_reduced, km05$cluster),digits=2)
+ch_km06 <- round(calinhara(DTM_reduced, km06$cluster),digits=2)
+ch_km07 <- round(calinhara(DTM_reduced, km07$cluster),digits=2)
+ch_km08 <- round(calinhara(DTM_reduced, km08$cluster),digits=2)
+ch_km09 <- round(calinhara(DTM_reduced, km09$cluster),digits=2)
+ch_km10 <- round(calinhara(DTM_reduced, km10$cluster),digits=2)
+ch_km11 <- round(calinhara(DTM_reduced, km11$cluster),digits=2)
+ch_km12 <- round(calinhara(DTM_reduced, km12$cluster),digits=2)
+ch_km13 <- round(calinhara(DTM_reduced, km13$cluster),digits=2)
+ch_km14 <- round(calinhara(DTM_reduced, km14$cluster),digits=2)
+ch_km15 <- round(calinhara(DTM_reduced, km15$cluster),digits=2)
+ch_km16 <- round(calinhara(DTM_reduced, km16$cluster),digits=2)
+ch_km17 <- round(calinhara(DTM_reduced, km17$cluster),digits=2)
+ch_km18 <- round(calinhara(DTM_reduced, km18$cluster),digits=2)
+ch_km19 <- round(calinhara(DTM_reduced, km19$cluster),digits=2)
+ch_km20 <- round(calinhara(DTM_reduced, km20$cluster),digits=2)
+# inspect calinhara scores
+ch_scores <- c(ch_km02, ch_km03, ch_km04, ch_km05, ch_km06, ch_km07,
+               ch_km08, ch_km09, ch_km10, ch_km11, ch_km12, ch_km13,
+               ch_km14, ch_km15, ch_km16, ch_km17, ch_km18, ch_km19,
+               ch_km20)
+names(ch_scores) <- c("ch_km02", "ch_km03", "ch_km04", "ch_km05", "ch_km06", "ch_km07",
+               "ch_km08", "ch_km09", "ch_km10", "ch_km11", "ch_km12", "ch_km13",
+               "ch_km14", "ch_km15", "ch_km16", "ch_km17", "ch_km18", "ch_km19",
+               "ch_km20")
+names(ch_scores)[which(ch_scores == max(ch_scores))]
+barplot(ch_scores, las = 2, axis.cex = .5)
+```
+
+calinhara: 3 or 7 there are periods (we need to cut so that 6 clusters are created because cluster 3 is discontinuous)
+
+```{r covtwit_01_32, echo=T, eval = T, message=FALSE, warning=FALSE}
+library(ape)
+dd <- dist(DTM_reduced, method = "manhattan")
+hc <- hclust(dd, method = "ward.D2")
+colors <- c("#999999", "gray40", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00")
+clus7 = cutree(hc, 7)
+jpeg("D:\\Uni\\UQ\\ResearchProjects\\01-TwitterCovid19\\images/Covid_Dendro_Periods3.jpg",
+    quality = 100, width = 960, height = 960)
+plot(as.phylo(hc), type = "fan", tip.color = colors[clus7],
+     label.offset = 1, cex = 2)
+dev.off()
+plot(as.phylo(hc), type = "fan", tip.color = colors[clus7],
+     label.offset = 1, cex =.7)
+```
+
+Inspect clusters
+
+```{r covtwit_01_33, echo=T, eval = T, message=FALSE, warning=FALSE}
+clusterclass <- data.frame(names(clus7), clus7)
+colnames(clusterclass) <- c("Date", "Cluster")
+# check at which h to cut so there are the optimal N of clusters
+#length(table(clusterclass$Cluster))
+clusterclass
+```
+
+As Cluster 3 is discontinuous, we create two separate clusters for it: leaving us with 6 main phases
+
+Manually cleaning of data-driven clustering
+
+```{r covtwit_01_34, echo=T, eval = T, message=FALSE, warning=FALSE}
+clusterclass <- clusterclass %>%
+  dplyr::mutate(NumDate = str_replace_all(Date, "-", ""),
+                NumDate = as.numeric(NumDate),
+                Period_Keyword = ifelse(NumDate <= 20200225, "Period_kw_01",
+                                 ifelse(NumDate <= 20200307, "Period_kw_02",
+                                 ifelse(NumDate <= 20200311, "Period_kw_03",
+                                 ifelse(NumDate <= 20200318, "Period_kw_04",
+                                 ifelse(NumDate <= 20200327, "Period_kw_05",
+                                 ifelse(NumDate <= 20200401, "Period_kw_06",
+                                        "Period_kw_07"))))))) %>%
+  dplyr::select(Date, Period_Keyword) %>%
+  as.data.frame()
+# inspect data
+head(clusterclass)
+```
+
+Add clusters to data
+
+```{r covtwit_01_35, echo=T, eval = T, message=FALSE, warning=FALSE}
+cleantweets2020 <- left_join(cleantweets2020, clusterclass, by = "Date") %>%
+  dplyr::mutate(Period_Keyword = ifelse(Date == "2020-01-03", "Period_kw_01", 
+                                 ifelse(Date == "2020-01-12", "Period_kw_01", Period_Keyword)))
+# save data
+write.table(cleantweets2020, here::here("data", "cleantweets_classified_periods.txt"), 
+            sep = "\t", row.names = F, quote = F)
+# inspect data
+head(cleantweets2020)
+```            
+            
+```{r covtwit_01_36, echo=T, eval = T, message=FALSE, warning=FALSE}
+p6d <- cleantweets2020 %>%
+  dplyr::mutate(SVM_class = ifelse(SVM_class == "Covid", 1, 0),
+                Date = factor(Date)) %>%
+  dplyr::group_by(Date) %>%
+  dplyr::summarise(Covidtweets = sum(SVM_class),
+                   Total = n(),
+                   Percent = Covidtweets/Total*100) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(NumDate = 1:length(Percent)) %>%
+  dplyr::left_join(clusterclass, by = "Date") %>%
+  dplyr::mutate(Period_Keyword = factor(Period_Keyword))
+# inspect data
+head(p6d)
+```
+
+```{r covtwit_01_37, echo=T, eval = T, message=FALSE, warning=FALSE}
+# create index for labels
+cs <- cumsum(table(p6d$Period_Keyword))
+cs0 <- c(0, cs)
+cs1 <- c(cs, max(cs))
+ix <- cs0+(cs1-cs0)/2
+ix <- ix[1:length(cs1)-1]
+# start plot
+ggplot(p6d, aes(x = NumDate, y = Percent)) +
+  theme_set(theme_bw(base_size = 10)) +
+  geom_line(color = "black") +
+  # vertical lines
+  geom_vline(xintercept = cs[1:length(cs)-1],
+             linetype="dashed", color = "gray30") +
+  # x axis labels
+  scale_x_discrete(breaks = p4d$NumDate[seq(1, length(p4d$NumDate), by = 5)],
+                   labels = p4d$Date[seq(1, length(p4d$Date), by = 5)],
+                   limits = 1: max(p4d$NumDate)) +
+  labs(x = "Date", y = "Percent (of all tweets)") +
+  theme(legend.position="none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.text.x = element_text(angle = 90, size =7.5)) +
+  coord_cartesian(ylim = c(0, 20)) +
+#  annotate(geom="text", x=cumsum(table(p6d$Period_Keyword))[1]/2, 
+#           y=19, label= "Phase 1", color="black")
+  ggplot2::annotate(geom="text", x=ix, 
+           y=19, label= c("Phase 1", "2", "3", "4", "5", "6", "7"), color="black")
+  ggsave(file = here::here("images", "Covid_SVM_periods.png"), height = 6,  width = 8, dpi = 320)
+```
+
+Plot relative frequencies of covid terms
+
+```{r covtwit_01_38, echo=T, eval = T, message=FALSE, warning=FALSE}
+keywordselection <- c("covid19", "coronavirus", "covid19australia",
+                      "lockdown", "quarantine", "spread", "schools", 
+                      "china", "economic", "distancing", "deaths", "curve")
+# extract frequencies
+kwfreqs <- cleantweets %>%
+  dplyr::select(Date, Text, NoTweets) %>%
+  dplyr::group_by(Date) %>%
+  dplyr::summarise(Text = paste(Text, collapse = " "),
+                   NoTweets = sum(NoTweets)) %>%
+  dplyr::ungroup() %>%
+  unnest_tokens(Word, Text, token = "tweets") %>%
+  dplyr::filter(Word %in% keywordselection) %>%
+  dplyr::group_by(Word, Date) %>%
+  dplyr::summarise(NoWords = n(),
+                   Percent = NoWords/unique(NoTweets)*100) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(-NoWords) %>%
+  dplyr::mutate(Date = factor(Date),
+                NumDate = as.numeric(Date),
+                Word = factor(Word))
+# inspect data
+head(kwfreqs)
+```
+
+Plot frequencies of selected keywords as line graph
+
+```{r covtwit_01_39, echo=T, eval = T, message=FALSE, warning=FALSE}
+p7d <- kwfreqs %>%
+  dplyr::filter(!grepl("2019", Date)) %>%
+  left_join(clusterclass, by = "Date") %>%
+  dplyr::mutate(Period_Keyword = factor(Period_Keyword)) %>%
+  dplyr::mutate(Date = factor(Date),
+                NumDate = as.numeric(Date),
+                Word = factor(Word))
+
+ggplot(p7d, aes(x = NumDate, y = Percent)) +
+  facet_wrap(vars(Word), ncol = 3, scales="free_y") +
+  geom_line(color = "gray80", size = .5) +
+  geom_smooth(se = F, span = .2, color = "gray20", size = .75) +
+  scale_x_discrete(breaks = seq(1, length(table(p7d$Date)), 10),
+                   labels = p7d$Date[seq(1, length(table(p7d$Date)), 10)],
+                   limit = 1:length(table(p7d$Date))) +
+  labs(x = "Date", y = "Percent (of all tweets)") +
+  theme_set(theme_bw(base_size = 12)) +
+  theme(legend.position="none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.text.x = element_text(angle = 90, size =7)) +
+  ggsave(file = here::here("images", "Covid_Keyterms_line.png"), height = 6,  width = 8, dpi = 320)
+```
+
+With periods
+
+```{r covtwit_01_40, echo=T, eval = T, message=FALSE, warning=FALSE}
+ggplot(p7d, aes(x = NumDate, y = Percent)) +
+  facet_wrap(vars(Word), ncol = 3, scales="free_y") +
+  geom_line(color = "gray80", size = .5) +
+  geom_smooth(se = F, span = .2, color = "gray20", size = .75) +
+    # vertical lines
+  geom_vline(xintercept = cumsum(table(p6d$Period_Keyword)),
+             linetype="dashed", color = "gray30") +
+  scale_x_discrete(breaks = seq(1, length(table(p7d$Date)), 10),
+                   labels = p7d$Date[seq(1, length(table(p7d$Date)), 10)],
+                   limit = 1:length(table(p7d$Date))) +
+  labs(x = "Date", y = "Percent (of all tweets)") +
+  theme_set(theme_bw(base_size = 12)) +
+  theme(legend.position="none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.text.x = element_text(angle = 90, size =7)) +
+  ggsave(file = here::here("images", "Covid_Keyterms_line_periods.png"), height = 6,  width = 8, dpi = 320)
+```
+
+Create tiles plot with dedrogram and alinged dates
+
+```{r covtwit_01_41, echo=T, eval = T, message=FALSE, warning=FALSE}
+library("ggdendro")
+library("reshape2")
+# create data set
+dendrodata <- as.matrix(DTM_reduced) %>%
+  as.data.frame()# %>%
+#  dplyr::mutate(Date = rownames(.))
+# inspect data
+#dendrodata
+# Run clustering
+dendrobject <- as.dendrogram(hclust(d = dist(x = dendrodata)))
+# save ordering (Date)
+dendorder <- order.dendrogram(dendrobject)
+```
+
+Create dendrogram objects to extract clusters within keywords
+
+```{r covtwit_01_42, echo=T, eval = T, message=FALSE, warning=FALSE}
+# create ordering for keywords
+dendrodata2 <- t(dendrodata)
+dendrobject2 <- as.dendrogram(hclust(d = dist(x = dendrodata2)))
+dendroplot2 <- ggdendrogram(data = dendrobject2, rotate = TRUE)  + 
+  theme(plot.margin = margin(.5,.5,.5,.5, "cm"),
+        axis.text.y = element_text(size = 6),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_blank())
+# save ordering (Keywords)
+dendorder2 <- order.dendrogram(dendrobject2)
+```
+
+Create heatmap
+
+```{r covtwit_01_43, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+# create data set
+heatdata <- as.matrix(DTM_reduced) %>%
+  scale() %>%
+  as.data.frame() %>%
+  dplyr::mutate(Date = rownames(.)) %>%
+  tidyr::gather(Keyword, Frequency, covid19:doctors) %>%
+  dplyr::mutate(Date = str_replace_all(Date, "\\..*", ""),
+                Date = str_replace_all(Date, "X", ""),
+                NumDate = 1:length(Date),
+                Date = factor(Date, levels = Date[dendorder], 
+                               ordered = TRUE),
+                Keyword = factor(Keyword, levels = unique(Keyword)[dendorder2], 
+                                 ordered = TRUE))
+# inspect data
+#head(heatdata)
+# create heat object
+ggplot(data = heatdata, aes(x = Keyword, y = Date)) +
+  geom_tile(aes(fill = Frequency)) +
+#  scale_fill_gradient2() +
+  scale_fill_gradient(low="white", high="gray10") +
+  scale_y_discrete(breaks = every_nth(n = 3)) +
+  theme(plot.margin = margin(.5,.5,.5,.5, "cm"),
+        axis.text.y=element_text(size =8),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        legend.position="none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.text.x = element_text(angle = 90, size =8,hjust=0.95,vjust=0.2)) +
+  ggsave(file = here::here("images", "Covid_OrderedHeatmap.png"), height = 6,  width = 12, dpi = 320)
+```
+
+```{r covtwit_01_44, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+#dendrodata
+dd <- dist(scale(DTM_reduced), method = "manhattan")
+hc <- hclust(dd, method = "ward.D2")
+hcd <- as.dendrogram(hc)
+#plot(hc, hang = -1, cex = 0.6)
+# unrooted
+#plot(as.phylo(hc), type = "unrooted", cex = 0.6, no.margin = TRUE)
+# combine dendextent with ggplot
+library(dendextend)
+dend <- hcd %>% set("branches_k_color", k=5)
+ggd1 <- as.ggdend(dend)
+ggplot(ggd1, horiz = TRUE)  + 
+  scale_x_discrete(breaks = every_nth(n = 3)) +
+  theme(axis.text.y = element_text(size = 9),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_blank()) +
+  ggsave(file = here::here("images", "Covid_Dendro_Periods2.png"), height = 16,  width = 10, dpi = 320)
+```
+
+
+# Outro
+
+```{r covtwit_01_45, echo=T, eval = T, message=FALSE, warning=FALSE}
+sessionInfo()
+```
+
+
+

@@ -1,0 +1,285 @@
+---
+title: "A real-time corpus-based analysis of the discourse around COVID19 in the Australian Twittersphere - Part 4: Period keywords"
+author: "Anonymous"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output: word_document
+bibliography: bibliography.bib
+link-citations: yes
+---
+
+# Introduction
+
+This document details the data analysis for the project *A real-time corpus-based analysis of the discourse around COVID19 in the Australian Twittersphere*. 
+
+This part of the analysis detects keywords that are significantly associated with specific periods in the covid tweets.
+
+The analysis is initiated by clearing the workspace, setting options, and activating packages as well as functions.
+
+```{r covtwit_04_01, echo=T, eval = T, message=FALSE, warning=FALSE}
+# clean current workspace
+rm(list=ls(all=T))  
+# load libraries
+library(tokenizers)
+library(tm)
+library(stringi)
+library(tidytext)
+library(tidyverse)
+library(SnowballC)
+library(here)
+# load functions
+source(here::here("scripts", "rmwords.R"))
+source(here::here("scripts", "CoocStatzFisher.R"))
+# load stop words
+english_stopwords <- readLines("https://slcladal.github.io/resources/stopwords_en.txt", encoding = "UTF-8")
+# set options
+options(stringsAsFactors = F)
+options(scipen = 999)
+options(max.print=10000)
+```
+
+## Load data
+
+```{r covtwit_04_02, echo=T, eval = T, message=FALSE, warning=FALSE}
+covidtwitterdata <- read.delim(here::here("tables", "covidtwitter2020data_fullyannotated.txt"),
+                               comment.char = "", quote = "") %>%
+  dplyr::mutate(Period = factor(str_remove_all(Period, "_kw_0")))
+# inspect data
+head(covidtwitterdata)
+```
+
+Summary
+
+```{r covtwit_04_03, echo=T, eval = T, message=FALSE, warning=FALSE}
+covidtwitterdata %>%
+  dplyr::select(Year, NoTweets, NoElements) %>%
+  dplyr::group_by(Year) %>%
+  dplyr::summarise(Tweets = n(),
+                   Elements = sum(NoElements))
+```
+
+Create table with words and frequencies per period
+
+```{r covtwit_04_04, echo=T, eval = T, message=FALSE, warning=FALSE}
+perioddata <- covidtwitterdata %>%
+  dplyr::group_by(Period) %>%
+  unnest_tokens(Word, Text) %>%
+  dplyr::group_by(Period, Word) %>%
+  dplyr::summarise(Frequency = n()) %>%
+  dplyr::group_by(Word) %>%
+  dplyr::mutate(Total = sum(Frequency)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(Word = ifelse(Total < 10, "other", Word)) %>%
+  dplyr::group_by(Period, Word) %>%
+  dplyr::summarise(Frequency = sum(Frequency)) %>%
+  tidyr::spread(Period, Frequency) %>%
+  replace(is.na(.), 0)
+# inspect data
+head(perioddata)
+```
+
+Function for data processing and extraction of significant keyterms
+
+```{r covtwit_04_05, echo=T, eval = T, message=FALSE, warning=FALSE}
+pdperiod <- function(perioddata, Targetperiod){
+  periodtb <- perioddata %>%
+    tidyr::gather(Period, Frequency, Period1:Period7) %>%
+    dplyr::mutate(Period = ifelse(Period != Targetperiod, "Other", Period)) %>%
+    dplyr::group_by(Period, Word) %>%
+    dplyr::mutate(Frequency = sum(Frequency)) %>%
+    unique() %>%
+    tidyr::spread(Period, Frequency) %>%
+    dplyr::rename(Target = Targetperiod, NonTarget = Other) %>%
+    dplyr::ungroup() %>%
+    dplyr::mutate(TotalTarget = sum(Target), TotalNonTarget = sum(NonTarget),
+                  NRows = n())
+  periodkeys <- CoocStatzFisher(periodtb)
+  periodkeys <- periodkeys %>%
+    dplyr::filter(CorrSignificance != "n.s.") %>%
+    dplyr::mutate(Period = rep(Targetperiod, length(CorrSignificance)))
+  return(periodkeys)
+}
+```
+
+# Extract keywords
+
+```{r covtwit_04_06, echo=T, eval = T, message=FALSE, warning=FALSE}
+keys_period1 <- pdperiod(perioddata, "Period1")
+keys_period2 <- pdperiod(perioddata, "Period2")
+keys_period3 <- pdperiod(perioddata, "Period3")
+keys_period4 <- pdperiod(perioddata, "Period4")
+keys_period5 <- pdperiod(perioddata, "Period5")
+keys_period6 <- pdperiod(perioddata, "Period6")
+keys_period7 <- pdperiod(perioddata, "Period7")
+# inspect data
+head(keys_period1)
+```
+
+Combine keywords
+
+```{r covtwit_04_07, echo=T, eval = T, message=FALSE, warning=FALSE}
+period_keys <- rbind(keys_period1, keys_period2, keys_period3, 
+                     keys_period4, keys_period5, keys_period6, keys_period7)
+# inspect data
+head(period_keys)
+```
+
+# Visualize keywords
+
+```{r covtwit_04_08, echo=T, eval = T, message=FALSE, warning=FALSE}
+p1d <- period_keys %>%
+  dplyr::mutate(Period = as.numeric(stringr::str_remove_all(Period, "Period"))) %>%
+  dplyr::filter(CorrSignificance == "p<.001") %>%
+  dplyr::filter(Word != "other") %>%
+#  dplyr::filter(phi > .001) %>%
+  dplyr::mutate(x2 = log(x2)) %>%
+  dplyr::mutate(x2 = ifelse(Type == "Overuse", x2, -x2)) 
+
+```
+
+
+```{r covtwit_04_09, echo=T, eval = T, message=FALSE, warning=FALSE}
+
+p1 <- ggplot(p1d, aes(x = Period, y = x2)) +
+#  geom_point()+
+  #geom_text(aes(label=Word),hjust=0, vjust=-1,
+  #          position=position_jitter(width=.5,height=1), size = 2) +
+  geom_text(aes(label = Word), check_overlap = TRUE, vjust = 1.5) +
+  labs(x = "Phase", y = "Association strength (logged X2)") +
+  scale_x_continuous(breaks = seq(1, 7, 1), 
+                     labels= seq(1, 7, 1), 
+                     limits = c(0.5, 7.5)) +
+  theme_set(theme_bw(base_size = 10)) +
+  theme(legend.position="none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.text.x = element_text(angle = 0, size =7.5),
+        plot.margin = unit(c(.2, .2, .2, .2), "cm")) +
+  coord_cartesian(ylim = c(-10, 10)) +
+  ggsave(file = here::here("images", "Keyterms_Period.png"), 
+         height = 4,  width = 6, dpi = 320)
+p1
+```
+
+Reformat data for mosaicplot
+
+```{r covtwit_04_10, echo=T, eval = T, message=FALSE, warning=FALSE}
+topicsperiod <- covidtwitterdata %>%
+  dplyr::select(Topic, Period) %>%
+  dplyr::mutate(Topic = str_remove_all(Topic, "_.*"),
+                Topic = factor(Topic)) %>%
+  group_by(Period, Topic) %>%
+  dplyr::summarise(Frequency = n()) %>%
+  tidyr::spread(Topic, Frequency)
+# inspect data
+topicsperiod
+```
+
+
+```{r covtwit_04_11, echo=T, eval = T, message=FALSE, warning=FALSE}
+topicsperiod_x2 <- chisq.test(as.matrix(topicsperiod[, 2:ncol(topicsperiod)]))
+stdres <- topicsperiod_x2$stdres
+rownames(stdres) <- topicsperiod$Period
+stdres
+```
+
+
+```{r covtwit_04_12, echo=T, eval = T, message=FALSE, warning=FALSE}
+topicsperiodgg <- topicsperiod %>%
+  gather(Topic, Frequency, Topic1:Topic5) %>%
+  cbind(as.vector(stdres)) %>%
+  rename(StandardizedResidual = "...4") %>%
+  dplyr::group_by(Topic) %>%
+  dplyr::mutate(Topic_freq = sum(Frequency),
+                Topic_prcnt = Frequency/Topic_freq) %>%
+  dplyr::ungroup() %>%
+  dplyr::group_by(Period) %>%
+  dplyr::mutate(Period_freq = sum(Frequency)) %>%
+  dplyr::mutate(Period_prcnt = Frequency/sum(Frequency)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(Tweets_prcnt = Period_freq/sum(unique(Period_freq)))
+# inspect results
+topicsperiodgg
+
+```
+
+
+
+```{r covtwit_04_13, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+topicsperiodgg <- topicsperiodgg %>%
+  mutate(StandardizedResidual = case_when(StandardizedResidual <= -4 ~ "min",
+                                          StandardizedResidual <= -2 ~ "low",
+                                          StandardizedResidual <= 0 ~ "mid",
+                                          StandardizedResidual <= 2 ~ "med",
+                                          StandardizedResidual <= 4 ~ "high",
+                                          TRUE ~ "max")) %>%
+  mutate(StandardizedResidual = factor(StandardizedResidual,
+                                       levels = c("min", "low", "mid", "med", "high", "max"),
+                                       labels = c("<= -4", "<= -2", "<= 0",   "<= 2",  "<= 4", "> 4"))) %>%
+  dplyr::mutate(Topic = factor(Topic, labels=c("Topic 1: MEDICAL", "Topic 2: INTERNATIONAL", 
+                                               "Topic 3: RESTRICTIONS/HOME", "Topic 4: SPREAD", 
+                                               "Topic 5: ECONOMY")))
+```
+
+
+
+```{r covtwit_04_14, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+topicsperiodgg %>%
+  ggplot(aes(Period,
+             Topic_prcnt,
+             color = Topic, 
+             fill = StandardizedResidual,
+             width = Period_freq)) + 
+  geom_bar(stat = "identity", position = "fill") +
+  facet_grid(~Period, scales = "free_x", space = "free_x") +
+  scale_fill_brewer(name = "Std. Res.", palette = "RdGy") +
+  scale_color_manual(values = rep("black", length(names(table(topicsperiodgg$Topic))))) +
+  theme_void()  +
+  theme(panel.spacing.x = unit(0, "npc"),
+        legend.position = "top",
+        legend.key.size = unit(.2, "cm")) +
+  ggsave(file = here::here("images", "ggmosaic.png"), 
+         height = 4,  width = 12, dpi = 320)
+```
+
+
+## Mosaic plot
+
+```{r covtwit_04_15, echo=T, eval = T, message=FALSE, warning=FALSE}
+colnames(topicsperiod) <- c("Period", "Topic1_MEDICAL", "Topic2_INTERNATIONAL", 
+                            "Topic3_RESTRICTIONS/HOME", "Topic4_SPREAD", 
+                            "Topic5_ECONOMY")
+rownames
+
+jpeg(here::here("images", "Covid_Mosaic_PeriodsTopic.jpg"),
+    quality = 100, width = 960, height = 1160)
+mosaicplot(topicsperiod, shade = TRUE, type = "pearson", main = "", cex = 1.25)
+dev.off()
+mosaicplot(topicsperiod, shade = TRUE, type = "pearson", main = "")
+```
+
+# CFA
+
+Reformat data for CFA
+
+```{r covtwit_04_16, echo=T, eval = T, message=FALSE, warning=FALSE}
+topicsperiod_cfa <- covidtwitterdata %>%
+  dplyr::select(Topic, Period) %>%
+  dplyr::mutate(Topic = str_remove_all(Topic, "_.*"),
+                Topic = factor(Topic))
+# inspect data
+head(topicsperiod_cfa)
+```
+
+## Perform CFA
+
+```{r covtwit_04_17, echo=T, eval = T, message=FALSE, warning=FALSE}
+library(cfa)
+cfa(topicsperiod_cfa)
+```
+
+# Outro
+
+```{r}
+sessionInfo()
+```
+

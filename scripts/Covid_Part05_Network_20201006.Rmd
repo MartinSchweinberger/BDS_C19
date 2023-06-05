@@ -1,0 +1,113 @@
+---
+title: "A real-time corpus-based analysis of the discourse around COVID19 in the Australian Twittersphere - Part 5: Networks"
+author: "Anonymous"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output: word_document
+bibliography: bibliography.bib
+link-citations: yes
+---
+
+This document details the data analysis for the project *A real-time corpus-based analysis of the discourse around COVID19 in the Australian Twittersphere*. 
+
+This part of the analysis we create networks showing the relation between COVID-19 keywords.
+
+The analysis is initiated by clearing the workspace, setting options, and activating packages as well as functions.
+
+```{r covtwit_05_01, message=FALSE, warning=FALSE}
+# clean current workspace
+rm(list=ls(all=T))  
+# load libraries
+library(stringr)
+library(tokenizers)
+library(tm)
+library(stringi)
+library(tidytext)
+library(tidyverse)
+library(SnowballC)
+library(here)
+keys <- c("covid19", "coronavirus", "covid", "covid19aus", "covid19australia", 
+          "cases", "pandemic", "covid19au", "health", "tested", "virus", "italy",
+          "lockdown", "deaths", "response", "testing", "covid2019", "china", "total", 
+          "positive", "distancing", "outbreak", "flu", "patients", "confirmed", 
+          "disease", "isolation", "quarantine", "symptoms", "workers", "spread", 
+          "cruise", "hospital", "curve", "healthcare", "test", "home", "died", "dr",
+          "crisis", "medical", "govt", "social", "death", "doctors", "panic", "daily", 
+          "access", "stay")
+# load stop words
+english_stopwords <- readLines("https://slcladal.github.io/resources/stopwords_en.txt", encoding = "UTF-8")
+# set options
+options(stringsAsFactors = F)
+options(scipen = 999)
+options(max.print=10000)
+```
+
+
+Load and process twitter data
+
+```{r covtwit_05_02, message=FALSE, warning=FALSE}
+covidtwitterdata <- read.delim(here::here("tables", "covidtwitter2020data_fullyannotated.txt"),
+                               comment.char = "", quote = "") %>%
+  dplyr::mutate(Period = factor(str_remove_all(Period, "_kw_0"))) %>%
+  dplyr::select(Date, Text) %>%
+  unnest_tokens(word, Text)  %>%
+  dplyr::mutate(keep = ifelse(word %in% keys, "keep", "remove")) %>%
+  dplyr::filter(keep == "keep") %>%
+  select(Date, word) %>%
+  dplyr::group_by(Date) %>%
+  summarize(Text = paste0(word, collapse = " "))
+# inspect data
+head(covidtwitterdata)
+```
+
+Convert Text to a vector of strings
+
+```{r covtwit_05_03, message=FALSE, warning=FALSE}
+cov_vec <- covidtwitterdata$Text
+```
+
+
+Create table with words and frequencies per day
+
+```{r covtwit_05_04, message=FALSE, warning=FALSE}
+library(quanteda)
+cov_dfm <- dfm(cov_vec, remove_punct = TRUE)
+head(cov_dfm)
+```
+
+Function for data processing and extraction of significant keyterms
+
+```{r covtwit_05_05, message=FALSE, warning=FALSE}
+cov_fcm <- fcm(cov_dfm)
+head(cov_fcm)
+```
+
+```{r covtwit_05_06, message=FALSE, warning=FALSE}
+norm=function(mat){
+  mx=mat[cbind(1:nrow(mat),max.col(mat))]
+  mn=mat[cbind(1:nrow(mat),max.col(-mat))]
+  mat/(mx-mn)
+}
+```
+
+```{r covtwit_05_07, message=FALSE, warning=FALSE}
+cov_fcm_nrm <- norm(cov_fcm)
+```
+
+
+# Extract keywords
+
+```{r covtwit_05_08, message=FALSE, warning=FALSE}
+textplot_network(cov_fcm_nrm, min_freq = 0.5, 
+                 edge_alpha = 0.05, 
+                 edge_color = "darkgray", 
+                 edge_size = 5) +
+   ggsave(file = here::here("images", "Network.png"), height = 5,  width = 6, dpi = 320)
+```
+
+
+Outro
+
+```{r}
+sessionInfo()
+```
+
